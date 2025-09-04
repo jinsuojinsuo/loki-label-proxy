@@ -1,12 +1,13 @@
 package main
 
 import (
+	"net/http"
+	"os"
+
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/common/version"
-	"gopkg.in/alecthomas/kingpin.v2"
-	"net/http"
-	"os"
 )
 
 func main() {

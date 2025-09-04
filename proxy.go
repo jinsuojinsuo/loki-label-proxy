@@ -2,11 +2,8 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
-	"github.com/grafana/loki/pkg/logql/syntax"
-	"github.com/prometheus/prometheus/model/labels"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -14,6 +11,11 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
+	"github.com/grafana/loki/v3/pkg/logql/syntax"
+	"github.com/prometheus/prometheus/model/labels"
 )
 
 type Enforcer struct {
@@ -189,7 +191,7 @@ func logqlLabels(logql string, assign labels.Labels) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	parsed.Walk(func(x interface{}) {
+	parsed.Walk(func(x syntax.Expr) {
 		switch me := x.(type) {
 		case *syntax.MatchersExpr:
 			for _, l := range assign {
@@ -200,7 +202,7 @@ func logqlLabels(logql string, assign labels.Labels) (string, error) {
 				}})
 			}
 		default:
-			// Do nothing
+			// do nothing
 		}
 	})
 	return parsed.String(), nil
@@ -247,7 +249,7 @@ func rewriteReq(enforce string, req *http.Request, assign labels.Labels, logger 
 		} else {
 			level.Error(logger).Log("msg", "unsupported method", "method", req.Method)
 			req.Header["X-Routing-Error"] = []string{fmt.Sprintf("Unsupported method %s", req.Method)}
-			return fmt.Errorf(req.Header["X-Routing-Error"][0])
+			return errors.New(req.Header["X-Routing-Error"][0])
 		}
 	}
 	return nil

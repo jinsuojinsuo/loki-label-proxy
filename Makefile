@@ -4,7 +4,7 @@ help: ## Displays help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-z0-9A-Z_-]+:.*?##/ { printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 .PHONY: build
-build: ## Build binaries with version set
+build: test ## Build binaries with version set
 	@CGO_ENABLED=0 go build -ldflags "-w -s \
 	-X github.com/prometheus/common/version.Version=${VER} \
 	-X github.com/prometheus/common/version.Revision=`git rev-parse --short HEAD` \
@@ -12,8 +12,12 @@ build: ## Build binaries with version set
 	-X github.com/prometheus/common/version.BuildUser=${USER}@`hostname` \
 	-X github.com/prometheus/common/version.BuildDate=`date +%Y/%m/%d-%H:%M:%SZ`"
 
+test: ## Run tests
+	@go vet ./...
+	@go test ./...
+
 docker: ## Build docker image
-	@docker build -t loki-label-proxy .
+	@docker build --platform linux/amd64 -t loki-label-proxy .
 
 push: ## Push docker image
 	docker tag loki-label-proxy sepa/loki-label-proxy

@@ -2,15 +2,16 @@ package main
 
 import (
 	"fmt"
-	"github.com/fsnotify/fsnotify"
-	"github.com/go-kit/kit/log/level"
-	"github.com/go-kit/log"
-	"gopkg.in/yaml.v3"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/go-kit/kit/log/level"
+	"github.com/go-kit/log"
+	"gopkg.in/yaml.v3"
 )
 
 // OrgConfig represents the configuration for single Grafana Org users in Loki
