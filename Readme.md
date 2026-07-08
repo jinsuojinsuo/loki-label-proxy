@@ -20,18 +20,22 @@ C -->|namespace:a| loki-label-proxy
 ```yaml
 org: '1'    # X-Scope-OrgID header value
 users:
-  default:  # if user is not found in config, this section is used
-    namespace: ingress-nginx # {...+, namespace="ingress-nginx"}
+  default:  # applied to unknown users and merged into known users
+    app: app-prod-.* # {...+, app=~"app-prod-.*"}
 
-  user1@corp.domain:   # you can enforce multiple fields
-    cluster: cluster1  # {...+, cluster="cluster1", index=~"app1|app2"}
-    index: app1|app2
+  user1@corp.domain:
+    namespace: namespace1  # user1 queries must match app-prod-.* AND namespace1
 
-  admin: {}            # empty = does not enforce any additional labels
+  user2@corp.domain:
+    app: app-stage-.* # same-label overrides are combined as app-prod-.*|app-stage-.*
+
+  admin: {}            # empty = admin access, no additional labels are enforced
 ```
 You can specify folder to read configuration files from. Each file should have users for single Org. Org id is unique and not merged, so last file read wins. Specified config path is monitored for changes and configs are reloaded automatically.
 
-If user is not found in config, `default` section is used. If `default` section is not set, request is denied (400).
+The `default` section is applied to unknown users. For known users with non-empty label sections, `default` labels and user labels are merged into one enforced matcher set. Different labels are combined with AND semantics: `default: {app: app-prod-.*}` plus `user1: {namespace: namespace1}` rewrites selectors to include both `app=~"app-prod-.*"` and `namespace=~"namespace1"`. If a known user sets the same label as `default` with a different value, the two values are combined into one regexp OR value, for example `app=~"app-prod-.*|app-stage-.*"`.
+
+An explicitly empty user section, for example `admin: {}`, is treated as unrestricted admin access and no additional labels are enforced. If `default` section is not set, config loading fails.
 
 ### Installation:
 arm64/amd64 compiled images are available on docker hub: 

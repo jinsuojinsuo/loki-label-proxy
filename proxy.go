@@ -166,20 +166,43 @@ func (e *Enforcer) lookupUser(req *http.Request) (labels.Labels, error) {
 	if _, ok := e.config.orgs[org]; !ok {
 		return nil, fmt.Errorf("X-Scope-OrgID %s not found in configs", org)
 	}
-	var m map[string]string
-	if u, ok := e.config.orgs[org].Users[user]; ok {
-		m = u
-	} else if d, ok := e.config.orgs[org].Users["default"]; ok {
-		m = d
-	}
-	if m == nil {
+	m, ok := userLabels(e.config.orgs[org].Users, user)
+	if !ok {
 		return nil, fmt.Errorf("no user %s found in config, and no `default` defined", user)
 	}
-	assign := make(labels.Labels, 0, len(m))
-	for k, v := range m {
-		assign = append(assign, labels.Label{Name: k, Value: v})
+	return labels.FromMap(m), nil
+}
+
+func userLabels(users map[string]map[string]string, user string) (map[string]string, bool) {
+	defaults, hasDefault := users["default"]
+	if u, ok := users[user]; ok {
+		if user == "default" {
+			return defaults, true
+		}
+		if len(u) == 0 {
+			return map[string]string{}, true
+		}
+		return mergeLabels(defaults, u), true
 	}
-	return assign, nil
+	if hasDefault {
+		return defaults, true
+	}
+	return nil, false
+}
+
+func mergeLabels(defaults map[string]string, user map[string]string) map[string]string {
+	merged := make(map[string]string, len(defaults)+len(user))
+	for k, v := range defaults {
+		merged[k] = v
+	}
+	for k, v := range user {
+		if defaultValue, ok := merged[k]; ok && defaultValue != v {
+			merged[k] = defaultValue + "|" + v
+			continue
+		}
+		merged[k] = v
+	}
+	return merged
 }
 
 // Parse LogQL and add labels to series selector.
@@ -282,3 +305,4 @@ func rewriteField(field string, req *http.Request, form *url.Values, assign labe
 
 	return nil
 }
+
