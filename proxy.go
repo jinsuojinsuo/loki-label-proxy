@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ type Enforcer struct {
 	target      *url.URL
 	config      *Config
 	proxyPass   *httputil.ReverseProxy
+	proxyLabels *httputil.ReverseProxy
 	proxyQuery  *httputil.ReverseProxy
 	proxySeries *httputil.ReverseProxy
 }
@@ -49,6 +51,7 @@ func newEnforcer(addr *string, lokiUser *string, lokiPass *string, authUser *str
 		config:      cfg,
 	}
 	e.proxyPass = e.proxyFactory("")
+	e.proxyLabels = e.proxyFactory("labels")
 	e.proxyQuery = e.proxyFactory("query")
 	e.proxySeries = e.proxyFactory("match[]")
 	return e
@@ -68,6 +71,12 @@ func (e *Enforcer) Health(w http.ResponseWriter, _ *http.Request) {
 func (e *Enforcer) Pass(w http.ResponseWriter, r *http.Request) {
 	if e.basicAuth(w, r) {
 		e.proxyPass.ServeHTTP(w, r)
+	}
+}
+
+func (e *Enforcer) Labels(w http.ResponseWriter, r *http.Request) {
+	if e.basicAuth(w, r) {
+		e.proxyLabels.ServeHTTP(w, r)
 	}
 }
 
@@ -101,15 +110,16 @@ func (e *Enforcer) basicAuth(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// https://github.com/golang/go/issues/34733
-// It is used to cancel the request to upstream when Director sets the X-Routing-Error header
+// Routing errors stay in request context so hop-by-hop headers cannot remove them.
+type routingErrorKey struct{}
+
 type roundTripperFilter struct {
 	parent http.RoundTripper
 }
 
 func (rtf *roundTripperFilter) RoundTrip(r *http.Request) (*http.Response, error) {
-	if err, ok := r.Header["X-Routing-Error"]; ok {
-		return nil, fmt.Errorf("%s", err)
+	if err, ok := r.Context().Value(routingErrorKey{}).(error); ok {
+		return nil, err
 	}
 	return rtf.parent.RoundTrip(r)
 }
@@ -124,10 +134,11 @@ func (e *Enforcer) proxyFactory(enforce string) *httputil.ReverseProxy {
 		assign, err := e.lookupUser(req)
 		if err != nil {
 			level.Info(e.logger).Log("msg", "Request denied", "request", dumpReq(req, false), "error", err, "ip", req.RemoteAddr, "forwarded-for", req.Header.Get("X-Forwarded-For"))
-			req.Header.Set("X-Routing-Error", err.Error())
+			*req = *req.WithContext(context.WithValue(req.Context(), routingErrorKey{}, err))
 			return
 		}
 		if err := rewriteReq(enforce, req, assign, e.logger); err != nil {
+			*req = *req.WithContext(context.WithValue(req.Context(), routingErrorKey{}, err))
 			level.Info(e.logger).Log("msg", "Unable to rewrite request", "request", dumpReq(req, false), "error", err, "ip", req.RemoteAddr, "forwarded-for", req.Header.Get("X-Forwarded-For"))
 			return
 		}
@@ -145,9 +156,9 @@ func (e *Enforcer) proxyFactory(enforce string) *httputil.ReverseProxy {
 		Director:  director,
 		Transport: &roundTripperFilter{parent: http.DefaultTransport},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
-			if s, ok := req.Header["X-Routing-Error"]; ok {
+			if routingErr, ok := req.Context().Value(routingErrorKey{}).(error); ok {
 				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(strings.Join(s, ",") + "\n"))
+				_, _ = w.Write([]byte(routingErr.Error() + "\n"))
 				return
 			}
 		},
@@ -252,6 +263,9 @@ func dumpReq(req *http.Request, debug bool) string {
 
 // rewriteReq set/add the field enforce in GET/POST request
 func rewriteReq(enforce string, req *http.Request, assign labels.Labels, logger log.Logger) error {
+	if enforce == "labels" {
+		return rewriteLabelsReq(req, assign)
+	}
 	if enforce != "" {
 		if req.Method == "GET" {
 			qs := req.URL.Query()
@@ -271,10 +285,43 @@ func rewriteReq(enforce string, req *http.Request, assign labels.Labels, logger 
 			req.ContentLength = int64(len(data))
 		} else {
 			level.Error(logger).Log("msg", "unsupported method", "method", req.Method)
-			req.Header["X-Routing-Error"] = []string{fmt.Sprintf("Unsupported method %s", req.Method)}
-			return errors.New(req.Header["X-Routing-Error"][0])
+			return fmt.Errorf("unsupported method %s", req.Method)
 		}
 	}
+	return nil
+}
+
+// rewriteLabelsReq constrains metadata to streams visible to the current user.
+func rewriteLabelsReq(req *http.Request, assign labels.Labels) error {
+	if req.Method != http.MethodGet {
+		return fmt.Errorf("unsupported metadata method %s", req.Method)
+	}
+	qs, err := url.ParseQuery(req.URL.RawQuery)
+	if err != nil {
+		return err
+	}
+	if len(qs["query"]) > 1 {
+		return errors.New("only one metadata query is allowed")
+	}
+	var matchers []*labels.Matcher
+	if selector := strings.TrimSpace(qs.Get("query")); selector != "" {
+		matchers, err = syntax.ParseMatchers(selector, false)
+		if err != nil {
+			return err
+		}
+	}
+	if len(assign) == 0 {
+		return nil
+	}
+	for _, label := range assign {
+		matcher, err := labels.NewMatcher(labels.MatchRegexp, label.Name, label.Value)
+		if err != nil {
+			return err
+		}
+		matchers = append(matchers, matcher)
+	}
+	qs.Set("query", syntax.MatchersString(matchers))
+	req.URL.RawQuery = qs.Encode()
 	return nil
 }
 
@@ -286,7 +333,6 @@ func rewriteField(field string, req *http.Request, form *url.Values, assign labe
 				(*form)[field][i] = q
 			} else {
 				level.Error(logger).Log("msg", "failed to parse", field, m, "error", err)
-				req.Header["X-Routing-Error"] = []string{err.Error()}
 				return err
 			}
 		}
@@ -305,4 +351,3 @@ func rewriteField(field string, req *http.Request, form *url.Values, assign labe
 
 	return nil
 }
-

@@ -28,20 +28,25 @@ func main() {
 	cfg := newConfig(config, logger)
 	enforcer := newEnforcer(addr, lokiUser, lokiPass, authUser, authPassSha, cfg, logger)
 
-	http.HandleFunc("/", enforcer.NotFound)
-	http.HandleFunc("/healthz", enforcer.Health)
+	level.Info(logger).Log(http.ListenAndServe(":8080", newHTTPHandler(enforcer)))
+}
+
+func newHTTPHandler(enforcer *Enforcer) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", enforcer.NotFound)
+	mux.HandleFunc("/healthz", enforcer.Health)
 	// https://grafana.com/docs/loki/latest/api/
-	http.HandleFunc("/loki/api/v1/status/buildinfo", enforcer.Pass)
-	http.HandleFunc("/loki/api/v1/format_query", enforcer.Pass)
-	http.HandleFunc("/loki/api/v1/label", enforcer.Pass)  // grafana v8.5
-	http.HandleFunc("/loki/api/v1/labels", enforcer.Pass) // grafana v9
-	http.HandleFunc("/loki/api/v1/label/", enforcer.Pass)
-	http.HandleFunc("/loki/api/v1/query", enforcer.Query)
-	http.HandleFunc("/loki/api/v1/query_range", enforcer.Query)
-	http.HandleFunc("/loki/api/v1/series", enforcer.Series)
-	http.HandleFunc("/loki/api/v1/tail", enforcer.Query)
-	http.HandleFunc("/loki/api/v1/index/stats", enforcer.Query)
-	http.HandleFunc("/loki/api/v1/index/volume", enforcer.Query)
-	http.HandleFunc("/loki/api/v1/index/volume_range", enforcer.Query)
-	level.Info(logger).Log(http.ListenAndServe(":8080", nil))
+	mux.HandleFunc("/loki/api/v1/status/buildinfo", enforcer.Pass)
+	mux.HandleFunc("/loki/api/v1/format_query", enforcer.Pass)
+	mux.HandleFunc("/loki/api/v1/label", enforcer.Labels)  // grafana v8.5
+	mux.HandleFunc("/loki/api/v1/labels", enforcer.Labels) // grafana v9
+	mux.HandleFunc("/loki/api/v1/label/", enforcer.Labels)
+	mux.HandleFunc("/loki/api/v1/query", enforcer.Query)
+	mux.HandleFunc("/loki/api/v1/query_range", enforcer.Query)
+	mux.HandleFunc("/loki/api/v1/series", enforcer.Series)
+	mux.HandleFunc("/loki/api/v1/tail", enforcer.Query)
+	mux.HandleFunc("/loki/api/v1/index/stats", enforcer.Query)
+	mux.HandleFunc("/loki/api/v1/index/volume", enforcer.Query)
+	mux.HandleFunc("/loki/api/v1/index/volume_range", enforcer.Query)
+	return mux
 }
