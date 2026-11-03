@@ -39,7 +39,7 @@ func newEnforcer(addr *string, lokiUser *string, lokiPass *string, authUser *str
 		level.Error(logger).Log("msg", "Unable to parse addr as url", "error", err)
 		os.Exit(1)
 	}
-	level.Info(logger).Log("msg", fmt.Sprintf("Listening on :8080, forwarding to Loki upstream: %s://%s", target.Scheme, target.Host))
+	level.Info(logger).Log("msg", fmt.Sprintf("Listening on :8080, forwarding to Loki upstream: %s://%s%s", target.Scheme, target.Host, target.EscapedPath()))
 
 	e := &Enforcer{
 		target:      target,
@@ -125,10 +125,9 @@ func (rtf *roundTripperFilter) RoundTrip(r *http.Request) (*http.Response, error
 }
 
 func (e *Enforcer) proxyFactory(enforce string) *httputil.ReverseProxy {
-	// based on httputil.NewSingleHostReverseProxy()
+	rewriteURL := httputil.NewSingleHostReverseProxy(e.target).Director
 	director := func(req *http.Request) {
-		req.URL.Scheme = e.target.Scheme
-		req.URL.Host = e.target.Host
+		rewriteURL(req)
 		req.Host = e.target.Host
 
 		assign, err := e.lookupUser(req)
