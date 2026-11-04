@@ -1,0 +1,19 @@
+# 安装目录中放置二进制、start.sh，以及 config/ 下各实例的权限配置。
+# 将本文件复制为 /etc/systemd/system/loki-label-proxy.service，然后执行：
+#   sudo systemctl daemon-reload
+#   sudo systemctl start loki-label-proxy
+#   sudo systemctl stop loki-label-proxy
+# 自定义安装目录时，同步修改下面的 INSTALL_DIR 和 ExecStart 路径。
+[Unit]
+Description=Multiple Loki label proxies
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=INSTALL_DIR=/usr/local/loki-label-proxy
+ExecStart=/bin/bash /usr/local/loki-label-proxy/start.sh
+# 停止服务或主进程退出时，清理该服务下的全部代理。
+KillMode=control-group
+# 先发送 TERM，超过 10 秒仍未退出则发送 KILL。
+TimeoutStopSec=10
