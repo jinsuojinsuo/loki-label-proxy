@@ -12,11 +12,10 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	"github.com/go-kit/log/term"
 )
 
-// 风险：时间格式不符合约定，行号指向日志封装层，或文件中写入颜色控制符。
-func TestLoggerMetadataAndPlainOutput(t *testing.T) {
+// 风险：时间格式或调用位置不正确，重定向到文件后颜色丢失。
+func TestLoggerMetadataAndForcedColor(t *testing.T) {
 	var output bytes.Buffer
 	logger := newLogger(&output, "info")
 	_, file, line, _ := runtime.Caller(0)
@@ -37,8 +36,8 @@ func TestLoggerMetadataAndPlainOutput(t *testing.T) {
 	if !strings.Contains(got, "caller="+wantCaller+" ") {
 		t.Fatalf("caller must identify the actual log statement %s: %q", wantCaller, got)
 	}
-	if strings.Contains(got, "\x1b[") {
-		t.Fatalf("file output contains terminal colors: %q", got)
+	if !strings.HasPrefix(got, "\x1b[32;1m") {
+		t.Fatalf("non-terminal output must retain info color: %q", got)
 	}
 	if !strings.Contains(got, "level=info") || !strings.Contains(got, `msg="request completed"`) {
 		t.Fatalf("log level or message lost: %q", got)
@@ -74,7 +73,7 @@ func TestLoggerSeverityColors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var output bytes.Buffer
-			logger := term.NewColorLogger(&output, log.NewLogfmtLogger, logColors)
+			logger := newLogger(&output, "debug")
 			if err := tc.wrap(logger).Log("msg", "color check"); err != nil {
 				t.Fatal(err)
 			}

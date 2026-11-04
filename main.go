@@ -55,16 +55,16 @@ func newHTTPHandler(enforcer *Enforcer) http.Handler {
 	return mux
 }
 
-// newLogger 为所有应用日志增加本地时间和调用位置；仅终端输出启用颜色。
+// newLogger 为所有应用日志增加本地时间和调用位置；终端和日志文件均保留颜色。
 func newLogger(output io.Writer, logLevel string) log.Logger {
-	logger := term.NewLogger(output, log.NewLogfmtLogger, logColors)
+	logger := term.NewColorLogger(output, log.NewLogfmtLogger, logColors)
 	logger = log.NewSyncLogger(logger)
 	logger = level.NewFilter(logger, level.Allow(level.ParseDefault(logLevel, level.InfoValue())))
 	// 时间格式示例：11-04T18:30:25.123；caller 指向实际调用 Log 的文件和行号。
 	return log.With(logger, "time", log.TimestampFormat(time.Now, "01-02T15:04:05.000"), "caller", log.DefaultCaller)
 }
 
-// logColors 按级别选择终端前景色；文件输出不会调用这个颜色规则。
+// logColors 按级别选择前景色；重定向到文件时也写入 ANSI 颜色控制符。
 func logColors(keyvals ...interface{}) term.FgBgColor {
 	for i := 0; i+1 < len(keyvals); i += 2 {
 		if keyvals[i] != "level" {
