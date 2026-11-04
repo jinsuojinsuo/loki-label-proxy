@@ -154,12 +154,32 @@ func (e *Enforcer) proxyFactory(enforce string) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Director:  director,
 		Transport: &roundTripperFilter{parent: http.DefaultTransport},
+		// 记录所有上游最终响应，不修改状态码、响应头和正文。
+		ModifyResponse: func(resp *http.Response) error {
+			// 4xx、5xx 记 error；其他状态（包括成功的 200 和实时日志升级的 101）记 info。
+			logger := level.Info(e.logger)
+			if resp.StatusCode >= http.StatusBadRequest && resp.StatusCode < 600 {
+				logger = level.Error(e.logger)
+			}
+			// 仅记录定位请求所需的字段，不记录认证头、URL 账号密码、查询参数和响应正文。
+			logger.Log("msg", "Loki upstream response",
+				"method", resp.Request.Method, "upstream", e.target.Scheme+"://"+e.target.Host,
+				"path", resp.Request.URL.EscapedPath(), "status", resp.StatusCode)
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+			// 本地权限校验或查询改写失败仍返回 400，不当作上游连接错误处理。
 			if routingErr, ok := req.Context().Value(routingErrorKey{}).(error); ok {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(routingErr.Error() + "\n"))
 				return
 			}
+			// 上游连接或转发失败时，记录错误原因并返回 502。
+			// 不向客户端暴露内部连接错误详情。
+			level.Error(e.logger).Log("msg", "Loki upstream request failed",
+				"method", req.Method, "upstream", e.target.Scheme+"://"+e.target.Host,
+				"path", req.URL.EscapedPath(), "status", http.StatusBadGateway, "error", err)
+			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		},
 	}
 }
