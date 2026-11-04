@@ -13,6 +13,7 @@ import (
 func main() {
 	app := kingpin.New("loki-label-proxy", "Proxy to enforce LogQL stream labels").Version(version.Print("loki-label-proxy"))
 	app.HelpFlag.Short('h')
+	listen := app.Flag("listen", "HTTP listen address, for example :8080 or 127.0.0.1:8080.").Default(":8080").String()
 	addr := app.Flag("addr", "Server address. Can also be set using LOKI_ADDR env var.").Default("http://localhost:3100").Envar("LOKI_ADDR").String()
 	lokiUser := app.Flag("loki-user", "Username for connection to Loki. Can also be set using LOKI_USERNAME env var.").Default("").Envar("LOKI_USERNAME").String()
 	lokiPass := app.Flag("loki-pass", "Password for connection to Loki. Can also be set using LOKI_PASSWORD env var.").Default("").Envar("LOKI_PASSWORD").String()
@@ -28,7 +29,8 @@ func main() {
 	cfg := newConfig(config, logger)
 	enforcer := newEnforcer(addr, lokiUser, lokiPass, authUser, authPassSha, cfg, logger)
 
-	level.Info(logger).Log(http.ListenAndServe(":8080", newHTTPHandler(enforcer)))
+	level.Info(logger).Log("msg", "Listening on "+*listen)
+	level.Info(logger).Log(http.ListenAndServe(*listen, newHTTPHandler(enforcer)))
 }
 
 func newHTTPHandler(enforcer *Enforcer) http.Handler {

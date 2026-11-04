@@ -39,7 +39,7 @@ func newEnforcer(addr *string, lokiUser *string, lokiPass *string, authUser *str
 		level.Error(logger).Log("msg", "Unable to parse addr as url", "error", err)
 		os.Exit(1)
 	}
-	level.Info(logger).Log("msg", fmt.Sprintf("Listening on :8080, forwarding to Loki upstream: %s://%s%s", target.Scheme, target.Host, target.EscapedPath()))
+	level.Info(logger).Log("msg", fmt.Sprintf("Forwarding to Loki upstream: %s://%s%s", target.Scheme, target.Host, target.EscapedPath()))
 
 	e := &Enforcer{
 		target:      target,
