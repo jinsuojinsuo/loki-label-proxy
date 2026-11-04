@@ -1,12 +1,15 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
+	"github.com/go-kit/log/term"
 	"github.com/prometheus/common/version"
 )
 
@@ -23,8 +26,7 @@ func main() {
 	logLevel := app.Flag("log", "Log filtering level (info, debug)").Default("info").Enum("error", "warn", "info", "debug")
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 
-	logger := log.NewLogfmtLogger(os.Stdout)
-	logger = level.NewFilter(logger, level.Allow(level.ParseDefault(*logLevel, level.InfoValue())))
+	logger := newLogger(os.Stdout, *logLevel)
 
 	cfg := newConfig(config, logger)
 	enforcer := newEnforcer(addr, lokiUser, lokiPass, authUser, authPassSha, cfg, logger)
@@ -51,4 +53,33 @@ func newHTTPHandler(enforcer *Enforcer) http.Handler {
 	mux.HandleFunc("/loki/api/v1/index/volume", enforcer.Query)
 	mux.HandleFunc("/loki/api/v1/index/volume_range", enforcer.Query)
 	return mux
+}
+
+// newLogger 为所有应用日志增加本地时间和调用位置；仅终端输出启用颜色。
+func newLogger(output io.Writer, logLevel string) log.Logger {
+	logger := term.NewLogger(output, log.NewLogfmtLogger, logColors)
+	logger = log.NewSyncLogger(logger)
+	logger = level.NewFilter(logger, level.Allow(level.ParseDefault(logLevel, level.InfoValue())))
+	// 时间格式示例：11-04T18:30:25.123；caller 指向实际调用 Log 的文件和行号。
+	return log.With(logger, "time", log.TimestampFormat(time.Now, "01-02T15:04:05.000"), "caller", log.DefaultCaller)
+}
+
+// logColors 按级别选择终端前景色；文件输出不会调用这个颜色规则。
+func logColors(keyvals ...interface{}) term.FgBgColor {
+	for i := 0; i+1 < len(keyvals); i += 2 {
+		if keyvals[i] != "level" {
+			continue
+		}
+		switch keyvals[i+1] {
+		case level.InfoValue():
+			return term.FgBgColor{Fg: term.Green}
+		case level.WarnValue():
+			return term.FgBgColor{Fg: term.Yellow}
+		case level.ErrorValue():
+			return term.FgBgColor{Fg: term.Red}
+		case level.DebugValue():
+			return term.FgBgColor{Fg: term.Gray}
+		}
+	}
+	return term.FgBgColor{}
 }

@@ -124,6 +124,36 @@ func (rtf *roundTripperFilter) RoundTrip(r *http.Request) (*http.Response, error
 	return rtf.parent.RoundTrip(r)
 }
 
+// 非 200 正文只保留前 4 KiB 用于日志，实际转发不受此上限影响。
+const upstreamBodyLogLimit = 4 * 1024
+
+type upstreamLogBody struct {
+	io.ReadCloser
+	logger    log.Logger
+	fields    []interface{}
+	body      []byte
+	truncated bool
+}
+
+// Read 随转发采集日志前缀，原样返回读取结果，避免提前读取或吞掉错误。
+func (b *upstreamLogBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	captured := n
+	if remaining := upstreamBodyLogLimit - len(b.body); captured > remaining {
+		captured = remaining
+		b.truncated = true
+	}
+	b.body = append(b.body, p[:captured]...)
+	return n, err
+}
+
+// Close 保留原始响应流的关闭行为，并在转发结束后打印正文和截断标记。
+func (b *upstreamLogBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.logger.Log(append(b.fields, "body", string(b.body), "body_truncated", b.truncated)...)
+	return err
+}
+
 func (e *Enforcer) proxyFactory(enforce string) *httputil.ReverseProxy {
 	rewriteURL := httputil.NewSingleHostReverseProxy(e.target).Director
 	director := func(req *http.Request) {
@@ -161,10 +191,16 @@ func (e *Enforcer) proxyFactory(enforce string) *httputil.ReverseProxy {
 			if resp.StatusCode >= http.StatusBadRequest && resp.StatusCode < 600 {
 				logger = level.Error(e.logger)
 			}
-			// 仅记录定位请求所需的字段，不记录认证头、URL 账号密码、查询参数和响应正文。
-			logger.Log("msg", "Loki upstream response",
-				"method", resp.Request.Method, "upstream", e.target.Scheme+"://"+e.target.Host,
-				"path", resp.Request.URL.EscapedPath(), "status", resp.StatusCode)
+			// 请求字段不包含认证头、URL 账号密码和查询参数。
+			fields := []interface{}{"msg", "Loki upstream response",
+				"method", resp.Request.Method, "upstream", e.target.Scheme + "://" + e.target.Host,
+				"path", resp.Request.URL.EscapedPath(), "status", resp.StatusCode}
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusSwitchingProtocols {
+				// 非 200 随转发采集正文；101 的 Body 是双向连接，保持原样，不读取连接数据。
+				resp.Body = &upstreamLogBody{ReadCloser: resp.Body, logger: logger, fields: fields}
+			} else {
+				logger.Log(fields...)
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
