@@ -4,12 +4,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	"github.com/go-kit/log/term"
 	"github.com/prometheus/common/version"
 )
 
@@ -55,31 +55,46 @@ func newHTTPHandler(enforcer *Enforcer) http.Handler {
 	return mux
 }
 
-// newLogger 为所有应用日志增加本地时间和调用位置；终端和日志文件均保留颜色。
+// newLogger 增加本地时间和调用位置；终端和文件中仅日志级别词带颜色。
 func newLogger(output io.Writer, logLevel string) log.Logger {
-	logger := term.NewColorLogger(output, log.NewLogfmtLogger, logColors)
+	logger := log.NewLogfmtLogger(levelColorWriter{Writer: output})
 	logger = log.NewSyncLogger(logger)
 	logger = level.NewFilter(logger, level.Allow(level.ParseDefault(logLevel, level.InfoValue())))
 	// 时间格式示例：11-04T18:30:25.123；caller 指向实际调用 Log 的文件和行号。
 	return log.With(logger, "time", log.TimestampFormat(time.Now, "01-02T15:04:05.000"), "caller", log.DefaultCaller)
 }
 
-// logColors 按级别选择前景色；重定向到文件时也写入 ANSI 颜色控制符。
-func logColors(keyvals ...interface{}) term.FgBgColor {
-	for i := 0; i+1 < len(keyvals); i += 2 {
-		if keyvals[i] != "level" {
-			continue
-		}
-		switch keyvals[i+1] {
-		case level.InfoValue():
-			return term.FgBgColor{Fg: term.Green}
-		case level.WarnValue():
-			return term.FgBgColor{Fg: term.Yellow}
-		case level.ErrorValue():
-			return term.FgBgColor{Fg: term.Red}
-		case level.DebugValue():
-			return term.FgBgColor{Fg: term.Gray}
-		}
+type levelColorWriter struct {
+	io.Writer
+}
+
+// Write 仅给 level 包放在行首的级别词上色，避免改动消息或 body 中的同名文本。
+func (w levelColorWriter) Write(p []byte) (int, error) {
+	field, rest, ok := strings.Cut(string(p), " ")
+	if !ok {
+		return w.Writer.Write(p)
 	}
-	return term.FgBgColor{}
+	var color string
+	switch field {
+	case "level=info":
+		color = "\x1b[32;1m"
+	case "level=warn":
+		color = "\x1b[33;1m"
+	case "level=error":
+		color = "\x1b[31;1m"
+	case "level=debug":
+		color = "\x1b[37m"
+	default:
+		return w.Writer.Write(p)
+	}
+	// 级别词后立即复位，时间、调用位置、消息和正文保持默认颜色。
+	colored := "level=" + color + field[len("level="):] + "\x1b[0m " + rest
+	n, err := io.WriteString(w.Writer, colored)
+	if err != nil {
+		return 0, err
+	}
+	if n != len(colored) {
+		return 0, io.ErrShortWrite
+	}
+	return len(p), nil
 }
