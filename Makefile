@@ -22,3 +22,9 @@ docker: ## Build docker image
 push: ## Push docker image
 	docker tag loki-label-proxy sepa/loki-label-proxy
 	docker push sepa/loki-label-proxy
+
+install:build
+	INSTALL_DIR="/usr/local/loki-label-proxy" && \
+	mkdir -p "${INSTALL_DIR}/config" &&\
+	mv loki-label-proxy ${INSTALL_DIR}
+	mv loki-label-proxy.example.yaml /usr/local/loki-label-proxy/config/loki-label-proxy.example.yaml
