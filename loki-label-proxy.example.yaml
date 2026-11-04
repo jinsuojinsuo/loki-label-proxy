@@ -1,0 +1,109 @@
+# loki-label-proxy 示例权限配置
+#
+# 1. 复制为实际配置，再替换用户名、标签值，删除不需要的示例用户：
+#    cp loki-label-proxy.example.yaml loki-label-proxy.yaml
+#
+# 2. 启动示例：
+#    ./loki-label-proxy --listen=:8080 --addr=http://localhost:3100 --config=./loki-label-proxy.yaml
+#
+# 3. 启动参数不属于下面的 YAML 字段：
+#    --listen：代理监听地址，默认 :8080；可写成 127.0.0.1:8081。
+#    --addr：上游 Loki 根地址，支持路径前缀，例如 https://logs.example.com/loki-prefix/。
+#    --loki-user / --loki-pass：代理访问上游 Loki 或 Nginx 的 Basic Auth 账号、原始密码。
+#    --auth-user / --auth-pass-sha256：客户端访问本代理的 Basic Auth 账号、密码 SHA-256 值。
+#    --log：默认 info；debug 会记录完整请求，排查时注意认证头、Cookie 和令牌。
+#
+# 4. Grafana 配置 send_user_header = true，使其发送当前登录用户的 X-Grafana-User。
+#    数据源的 X-Scope-OrgID 必须与下面的 org 一致，不要固定 X-Grafana-User。
+#    代理信任上游传入的用户名，只允许受信任的 Grafana/认证入口访问代理。
+#
+# 5. 本文件只定义一个 org。多个租户分别放在不同文件中，再用 --config 指定配置目录。
+#    配置目录只放实际权限配置，不放示例、备份或其他文件；当前程序会读取其中的普通文件。
+#    同一个 org 不要重复定义；不要把本文件与其副本一起加载。
+
+# 对应请求头 X-Scope-OrgID，是 Loki 租户标识，不是 Grafana 组织编号。
+# Loki 使用 auth_enabled: false 时，默认租户为 fake。
+# Loki 已开启多租户时，将 fake 改为实际租户名，例如 prod-luck77。
+org: "fake"
+
+# 键名填写实际 Grafana 登录用户名，统一使用小写；不是角色名或团队名。
+# 下面各用户互相独立，按需要保留、复制或修改。
+#
+# 标签规则：
+# 1. 所有标签值必须是正则字符串，不能使用 YAML 数组。
+# 2. 单个正则匹配整个标签值；多个候选值用 |，组合用括号。
+# 3. 同名标签在 default 与用户规则之间按正则“或”合并。
+# 4. 不同标签之间取“且”；用户原查询也必须与附加权限同时满足。
+# 5. 使用 Go/RE2 正则，不支持前后查找等表达式，例如 (?!...)。
+users:
+  # 默认拒绝：未单独配置的用户使用此规则。
+  # default 必须存在，删除会导致加载失败。
+  # a^ 不匹配任何字符串，用户因此查不到日志。
+  # 不要改为 default: {}，否则未知用户将没有标签限制。
+  # 不要把默认 job 设为宽权限，再指望用户规则将它收窄：同名标签会取“或”。
+  default:
+    job: "a^"
+
+  # 示例 1：允许全部测试日志。
+  # 实际登录名为 test，允许 test- 开头且后面至少有一个字符的 job。
+  # 例如 test-sgp-luck77；不允许 prod-singapore-luck77。
+  # 与默认规则合并为 a^|test-.+，匹配范围仍等价于 test-.+。
+  test:
+    job: "test-.+"
+
+  # 示例 2：只允许一个游戏的一个环境、地区。
+  # alice 只能查询新加坡正式环境的 luck77。
+  alice:
+    job: "prod-singapore-luck77"
+
+  # 示例 3：允许多个明确指定的 job。
+  # bob 只允许这两项，不会额外开放其他地区、游戏或组合。
+  bob:
+    job: "(prod-singapore-luck77|prod-frank-lucky_gift)"
+
+  # 示例 4：允许多个地区和多个游戏的全部组合。
+  # carol 可查询新加坡、法兰克福正式环境中的 luck77 和 lucky_gift，共四种组合。
+  # 地区拼写以实际标签为准，sgp 与 singapore 不会自动等价。
+  carol:
+    job: "prod-(singapore|frank)-(luck77|lucky_gift)"
+
+  # 示例 5：同一个游戏同时开放测试、正式以及多个地区。
+  # dave 可查询下面三种环境、地区组合的 luck77，不能查询其他游戏。
+  dave:
+    job: "(test-sgp|prod-singapore|prod-frank)-luck77"
+
+  # 示例 6：同时限制游戏范围和主机范围。
+  # 两个标签取“且”：必须是指定游戏，并且来自这两台主机之一。
+  # hostname 只是标签示例；实际主机标签名若不同，要相应替换。
+  erin:
+    job: "prod-singapore-luck77"
+    hostname: "(sgp-game-01|sgp-game-02)"
+
+  # 示例 7：按 service_name 授权两个游戏，不区分其环境和地区。
+  # 必须同时设置 job 覆盖默认 a^，否则仅配置 service_name 仍会查不到日志。
+  # .+ 要求 job 非空；service_name 条件仍必须同时满足，不会开放其他游戏。
+  # service_name 必须是实际存在的日志标签。
+  frank:
+    job: ".+"
+    service_name: "(luck77|lucky_gift)"
+
+  # 示例 8：标签值包含正则特殊字符时，按字面值匹配。
+  # 假设实际 job 名为 prod-singapore-game.v2，点号需要写为 \.。
+  # 这里使用 YAML 单引号，保留反斜杠；若用双引号则需要额外转义。
+  version_reader:
+    job: 'prod-singapore-game\.v2'
+
+  # 示例 9：明确禁止一个已登记用户访问日志。
+  # grace 仍有 Grafana 账号，但这份代理规则不允许其查询任何日志。
+  grace:
+    job: "a^"
+
+  # 示例 10：不附加任何标签限制，可查询当前 org/租户中的全部日志。
+  # 显式空规则会跳过 default 的标签限制，只给受信任的运维用户使用。
+  # opsadmin 是登录用户名；本程序不会检查或自动授予 Grafana Admin 角色。
+  opsadmin: {}
+
+# 新增用户：复制所需示例，替换为实际小写登录名和标签范围。
+# 修改后采用受控重启，并验证“能查到允许日志、查不到禁止日志”。
+# 当前程序有文件变化重载机制，但配置表并发更新缺少同步保护。
+# 按 job 授权也会限制获准日志流中的标签名称、hostname、service_name 等标签列表。
