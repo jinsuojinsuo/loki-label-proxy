@@ -17,3 +17,6 @@ ExecStart=/bin/bash /usr/local/loki-label-proxy/start.sh
 KillMode=control-group
 # 先发送 TERM，超过 10 秒仍未退出则发送 KILL。
 TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
